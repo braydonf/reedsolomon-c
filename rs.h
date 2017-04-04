@@ -73,7 +73,8 @@ int reed_solomon_decode(reed_solomon* rs,
  * nr_shards: assert(0 == nr_shards % rs->data_shards)
  * shards[nr_shards][block_size]
  * */
-int reed_solomon_encode2(reed_solomon* rs, unsigned char** shards, int nr_shards, int block_size);
+int reed_solomon_encode2(reed_solomon* rs, uint8_t** data_blocks,
+                         uint8_t** fec_blocks, int nr_shards, int block_size);
 
 /**
  * reconstruct a big size of buffer

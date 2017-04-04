@@ -47,6 +47,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include <assert.h>
 #include "rs.h"
@@ -297,13 +298,12 @@ generate_gf(void)
 
 #define UNROLL 16 /* 1, 4, 8, 16 */
 static void
-slow_addmul1(gf *dst1, gf *src1, gf c, int sz)
+slow_addmul1(gf *dst, gf *src, gf c, int sz)
 {
-    USE_GF_MULC ;
-    register gf *dst = dst1, *src = src1 ;
-    gf *lim = &dst[sz - UNROLL + 1] ;
+    USE_GF_MULC;
+    gf *lim = &dst[sz - UNROLL + 1];
 
-    GF_MULC0(c) ;
+    GF_MULC0(c);
 
 #if (UNROLL > 1) /* unrolling by 8/16 is quite effective on the pentium */
     for (; dst < lim ; dst += UNROLL, src += UNROLL ) {
@@ -777,13 +777,14 @@ void reed_solomon_release(reed_solomon* rs) {
  * fec_blocks[rs->data_shards][block_size]
  * */
 int reed_solomon_encode(reed_solomon* rs,
-        unsigned char** data_blocks,
-        unsigned char** fec_blocks,
-        int block_size) {
+                        uint8_t** data_blocks,
+                        uint8_t** fec_blocks,
+                        int block_size)
+{
     assert(NULL != rs && NULL != rs->parity);
 
-    return code_some_shards(rs->parity, data_blocks, fec_blocks
-            , rs->data_shards, rs->parity_shards, block_size);
+    return code_some_shards(rs->parity, data_blocks, fec_blocks,
+                            rs->data_shards, rs->parity_shards, block_size);
 }
 
 /**
@@ -895,15 +896,14 @@ int reed_solomon_decode(reed_solomon* rs,
  * nr_shards: assert(0 == nr_shards % rs->shards)
  * shards[nr_shards][block_size]
  * */
-int reed_solomon_encode2(reed_solomon* rs, unsigned char** shards, int nr_shards, int block_size) {
-    unsigned char** data_blocks;
-    unsigned char** fec_blocks;
-    int i, ds = rs->data_shards, ps = rs->parity_shards, ss = rs->shards;
-    i = nr_shards / ss;
-    data_blocks = shards;
-    fec_blocks = &shards[(i*ds)];
+int reed_solomon_encode2(reed_solomon* rs, uint8_t** data_blocks,
+                         uint8_t**fec_blocks, int nr_shards, int block_size) {
+    int ds = rs->data_shards;
+    int ps = rs->parity_shards;
+    int ss = rs->shards;
+    int i = nr_shards / ss;
 
-    for(i = 0; i < nr_shards; i += ss) {
+    for (i = 0; i < nr_shards; i += ss) {
         reed_solomon_encode(rs, data_blocks, fec_blocks, block_size);
         data_blocks += ds;
         fec_blocks += ps;
