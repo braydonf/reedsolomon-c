@@ -84,6 +84,8 @@ int reed_solomon_encode2(reed_solomon* rs, uint8_t** data_blocks,
  * shards[nr_shards][block_size]
  * marks[nr_shards] marks as errors
  * */
-int reed_solomon_reconstruct(reed_solomon* rs, unsigned char** shards, unsigned char* marks, int nr_shards, int block_size);
+int reed_solomon_reconstruct(reed_solomon* rs, uint8_t** data_blocks,
+                             uint8_t** fec_blocks, unsigned char* marks,
+                             int nr_shards, int block_size);
 #endif
 

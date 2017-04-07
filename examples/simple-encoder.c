@@ -9,6 +9,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 #include "../rs.h"
 
@@ -58,7 +59,7 @@ int main(int argc, char *argv[]) {
 
     fec_init();
 
-    fd = open(filename, O_RDONLY);
+    fd = open(filename, O_RDWR);
     if (fd < 0) {
         fprintf(stderr, "input file: %s not found\n", filename);
         exit(1);
@@ -72,7 +73,7 @@ int main(int argc, char *argv[]) {
            size, block_size, total_shards);
 
     uint8_t *map = (uint8_t *)mmap(NULL, size, PROT_READ | PROT_WRITE,
-                                   MAP_PRIVATE, fd, 0);
+                                   MAP_SHARED, fd, 0);
     if (map == MAP_FAILED) {
         fprintf(stderr, "input file: %s failed to memory map\n", filename);
         exit(1);
@@ -120,8 +121,27 @@ int main(int argc, char *argv[]) {
         fec_blocks[i] = map_parity + i * block_size;
     }
 
+    printf("start encoding.\n");
     rs = reed_solomon_new(data_shards, parity_shards);
     reed_solomon_encode2(rs, data_blocks, fec_blocks, total_shards, block_size);
+    printf("end encoding.\n");
+
+    printf("begin corruption.\n");
+    srand(time(NULL));
+    uint8_t *zilch = (uint8_t *)calloc(1, total_shards);
+    memset(zilch, 0, sizeof(zilch));
+    for(i = 0; i < parity_shards; i++) {
+        int corr = rand() % data_shards;
+        printf("corrupting %d\n", corr);
+        memset(map + corr * block_size, 137, block_size);
+        zilch[corr] = 1;
+    }
+    printf("end corruption.\n");
+
+    printf("begin reconstruction.\n");
+    reed_solomon_reconstruct(rs, data_blocks, fec_blocks, zilch,
+    total_shards, block_size);
+    printf("end reconstruction.\n");
 
     munmap(map, size);
     munmap(map_parity, parity_size);
