@@ -17,8 +17,8 @@ int main(int argc, char *argv[]) {
     struct stat st;
     int parity_shards = 0;
     int data_shards = 0;
+    uint64_t block_size = 8388608;
     int total_shards;
-    uint64_t block_size;
     char* outfilename = NULL;
     char* filename = NULL, f[256];
     int i;
@@ -29,14 +29,8 @@ int main(int argc, char *argv[]) {
     char output[256];
     uint64_t size;
 
-    while(-1 != (i = getopt(argc, argv, "d:p:o:f:"))) {
+    while(-1 != (i = getopt(argc, argv, "o:f:"))) {
         switch(i) {
-            case 'd':
-                data_shards = atoi(optarg);
-                break;
-            case 'p':
-                parity_shards = atoi(optarg);
-                break;
             case 'o':
                 outfilename = optarg;
                 break;
@@ -45,13 +39,13 @@ int main(int argc, char *argv[]) {
                 filename = f;
                 break;
             default:
-                fprintf(stderr, "simple-encoder -d 10 -p 3 -o output -f " \
+                fprintf(stderr, "simple-encoder -o output -f " \
                         "filename.ext\n");
                 exit(1);
         }
     }
 
-    if (0 == parity_shards || 0 == data_shards || NULL == filename) {
+    if (NULL == filename) {
         fprintf(stderr, "error input, example:\nsimple-encoder -d 10 -p 3 " \
                 "-o output -f filename.ext\n");
         exit(1);
@@ -67,10 +61,17 @@ int main(int argc, char *argv[]) {
 
     fstat(fd, &st);
     size = st.st_size;
-    block_size = (size+data_shards-1) / data_shards;
+    data_shards = size / block_size;
+    if (size % block_size) {
+        data_shards += 1;
+    }
+    parity_shards = data_shards * 2 / 3;
+    if (data_shards * 2 % 3) {
+        parity_shards += 1;
+    }
     total_shards = data_shards + parity_shards;
-    printf("filename=%s size=%lu block_size=%li total_shards=%d\n", filename,
-           size, block_size, total_shards);
+    printf("filename=%s size=%lu block_size=%li data_shards=%d parity_shards=%d total_shards=%d\n", filename,
+           size, block_size, data_shards, parity_shards, total_shards);
 
     uint8_t *map = (uint8_t *)mmap(NULL, size, PROT_READ | PROT_WRITE,
                                    MAP_SHARED, fd, 0);
@@ -133,14 +134,14 @@ int main(int argc, char *argv[]) {
     for(i = 0; i < parity_shards; i++) {
         int corr = rand() % data_shards;
         printf("corrupting %d\n", corr);
-        memset(map + corr * block_size, 137, block_size);
+        memset(map + corr * block_size, 137, 1);
         zilch[corr] = 1;
     }
     printf("end corruption.\n");
 
     printf("begin reconstruction.\n");
     reed_solomon_reconstruct(rs, data_blocks, fec_blocks, zilch,
-    total_shards, block_size);
+                             total_shards, block_size);
     printf("end reconstruction.\n");
 
     munmap(map, size);
