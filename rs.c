@@ -290,18 +290,20 @@ generate_gf(void)
  * Note that gcc on
  */
 #if 0
-#define addmul(dst, src, c, sz) \
-    if (c != 0) addmul1(dst, src, c, sz)
+#define addmul(dst, src, c, sz, max)                \
+    if (c != 0) addmul1(dst, src, c, sz, max)
 #endif
 
 
 
 #define UNROLL 16 /* 1, 4, 8, 16 */
 static void
-slow_addmul1(gf *dst, gf *src, gf c, int sz)
+slow_addmul1(gf *dst, gf *src, gf c, int sz, int max)
 {
     USE_GF_MULC;
-    gf *lim = &dst[sz - UNROLL + 1];
+    int dif = sz - max;
+    int pos = max - UNROLL + 1;
+    gf *lim = &dst[pos];
 
     GF_MULC0(c);
 
@@ -329,16 +331,24 @@ slow_addmul1(gf *dst, gf *src, gf c, int sz)
 #endif
     }
 #endif
-    lim += UNROLL - 1 ;
-    for (; dst < lim; dst++, src++ )        /* final components */
-    GF_ADDMULC( *dst , *src );
+    lim += dif + UNROLL - 1 ;
+    /* final components */
+    for (; dst < lim; dst++, src++ ) {
+        if (pos < max) {
+            GF_ADDMULC( *dst , *src );
+        } else {
+            /* assume zero when past the max */
+            GF_ADDMULC( *dst , 0 );
+        }
+        pos += 1;
+    }
 }
 
 # define addmul1 slow_addmul1
 
-static void addmul(gf *dst, gf *src, gf c, int sz) {
-    // fprintf(stderr, "Dst=%p Src=%p, gf=%02x sz=%d\n", dst, src, c, sz);
-    if (c != 0) addmul1(dst, src, c, sz);
+static void addmul(gf *dst, gf *src, gf c, int sz, int max) {
+    fprintf(stderr, "Dst=%p Src=%p, gf=%02x sz=%d\n", dst, src, c, sz);
+    if (c != 0) addmul1(dst, src, c, sz, max);
 }
 
 /*
@@ -505,7 +515,7 @@ invert_mat(gf *src, int k)
         if (ix != icol) {
             c = p[icol] ;
             p[icol] = 0 ;
-            addmul(p, pivot_row, c, k );
+            addmul(p, pivot_row, c, k, k); //TODO check max is okay at same value as k
         }
         }
     }
@@ -660,16 +670,31 @@ static gf* multiply1(gf *a, int ar, int ac, gf *b, int br, int bc) {
 
 /* copy from golang rs version */
 static inline int code_some_shards(gf* matrixRows, gf** inputs, gf** outputs,
-        int dataShards, int outputCount, int byteCount) {
+                                   int dataShards, int outputCount, int byteCount,
+                                   uint64_t totalBytes) {
     gf* in;
     int iRow, c;
     for(c = 0; c < dataShards; c++) {
+        printf("c: %i\n", c);
+        printf("bytePosition: %i\n", c * byteCount);
+
+        uint64_t bytesRemaining = totalBytes - c * byteCount;
+        printf("bytesRemaining: %lu\n", bytesRemaining);
+
+        uint64_t max = byteCount;
+        if (bytesRemaining < byteCount) {
+            max = bytesRemaining;
+        }
+
+        printf("maxBytes: %lu\n", max);
+
         in = inputs[c];
         for(iRow = 0; iRow < outputCount; iRow++) {
+            printf("iRow: %i\n", iRow);
             if(0 == c) {
-                mul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount);
+                mul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount); // TODO bytesRemaining here?
             } else {
-                addmul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount);
+                addmul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount, max);
             }
         }
     }
@@ -779,12 +804,14 @@ void reed_solomon_release(reed_solomon* rs) {
 int reed_solomon_encode(reed_solomon* rs,
                         uint8_t** data_blocks,
                         uint8_t** fec_blocks,
-                        int block_size)
+                        int block_size,
+                        uint64_t total_bytes)
 {
     assert(NULL != rs && NULL != rs->parity);
 
     return code_some_shards(rs->parity, data_blocks, fec_blocks,
-                            rs->data_shards, rs->parity_shards, block_size);
+                            rs->data_shards, rs->parity_shards, block_size,
+                            total_bytes);
 }
 
 /**
@@ -798,12 +825,14 @@ int reed_solomon_encode(reed_solomon* rs,
  * nr_fec_blocks: the number of erased blocks
  * */
 int reed_solomon_decode(reed_solomon* rs,
-        unsigned char **data_blocks,
-        int block_size,
-        unsigned char **dec_fec_blocks,
-        unsigned int *fec_block_nos,
-        unsigned int *erased_blocks,
-        int nr_fec_blocks) {
+                        unsigned char **data_blocks,
+                        int block_size,
+                        unsigned char **dec_fec_blocks,
+                        unsigned int *fec_block_nos,
+                        unsigned int *erased_blocks,
+                        int nr_fec_blocks,
+                        uint64_t total_bytes)
+{
     /* use stack instead of malloc, define a small number of DATA_SHARDS_MAX to save memory */
     gf dataDecodeMatrix[DATA_SHARDS_MAX*DATA_SHARDS_MAX];
     unsigned char* subShards[DATA_SHARDS_MAX];
@@ -886,7 +915,7 @@ int reed_solomon_decode(reed_solomon* rs,
     //print_matrix2(outputs, nr_fec_blocks, block_size);
 
     return code_some_shards(dataDecodeMatrix, subShards, outputs,
-            dataShards, nr_fec_blocks, block_size);
+                            dataShards, nr_fec_blocks, block_size, total_bytes);
 }
 
 /**
@@ -897,14 +926,16 @@ int reed_solomon_decode(reed_solomon* rs,
  * shards[nr_shards][block_size]
  * */
 int reed_solomon_encode2(reed_solomon* rs, uint8_t** data_blocks,
-                         uint8_t**fec_blocks, int nr_shards, int block_size) {
+                         uint8_t**fec_blocks, int nr_shards, int block_size,
+                         uint64_t total_bytes)
+{
     int ds = rs->data_shards;
     int ps = rs->parity_shards;
     int ss = rs->shards;
     int i = nr_shards / ss;
 
     for (i = 0; i < nr_shards; i += ss) {
-        reed_solomon_encode(rs, data_blocks, fec_blocks, block_size);
+        reed_solomon_encode(rs, data_blocks, fec_blocks, block_size, total_bytes);
         data_blocks += ds;
         fec_blocks += ps;
     }
@@ -924,7 +955,8 @@ int reed_solomon_reconstruct(reed_solomon* rs,
                              uint8_t** fec_blocks,
                              unsigned char* marks,
                              int nr_shards,
-                             int block_size)
+                             int block_size,
+                             uint64_t total_bytes)
 {
     unsigned char *dec_fec_blocks[DATA_SHARDS_MAX];
     unsigned int fec_block_nos[DATA_SHARDS_MAX];
@@ -958,13 +990,14 @@ int reed_solomon_reconstruct(reed_solomon* rs,
             }
 
             if(dn == pn) {
-                reed_solomon_decode(rs
-                        , data_blocks
-                        , block_size
-                        , dec_fec_blocks
-                        , fec_block_nos
-                        , erased_blocks
-                        , dn);
+                reed_solomon_decode(rs,
+                                    data_blocks,
+                                    block_size,
+                                    dec_fec_blocks,
+                                    fec_block_nos,
+                                    erased_blocks,
+                                    dn,
+                                    total_bytes);
             } else {
                 //error but we continue
                 err = -1;

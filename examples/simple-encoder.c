@@ -69,6 +69,7 @@ int main(int argc, char *argv[]) {
     if (data_shards * 2 % 3) {
         parity_shards += 1;
     }
+
     total_shards = data_shards + parity_shards;
     printf("filename=%s size=%lu block_size=%li data_shards=%d parity_shards=%d total_shards=%d\n", filename,
            size, block_size, data_shards, parity_shards, total_shards);
@@ -124,7 +125,7 @@ int main(int argc, char *argv[]) {
 
     printf("start encoding.\n");
     rs = reed_solomon_new(data_shards, parity_shards);
-    reed_solomon_encode2(rs, data_blocks, fec_blocks, total_shards, block_size);
+    reed_solomon_encode2(rs, data_blocks, fec_blocks, total_shards, block_size, size);
     printf("end encoding.\n");
 
     printf("begin corruption.\n");
@@ -141,7 +142,7 @@ int main(int argc, char *argv[]) {
 
     printf("begin reconstruction.\n");
     reed_solomon_reconstruct(rs, data_blocks, fec_blocks, zilch,
-                             total_shards, block_size);
+                             total_shards, block_size, size);
     printf("end reconstruction.\n");
 
     munmap(map, size);
