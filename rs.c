@@ -361,17 +361,19 @@ static void addmul(gf *dst, gf *src, gf c, int sz, int max) {
  * Note that gcc on
  */
 #if 0
-#define mul(dst, src, c, sz) \
-    do { if (c != 0) mul1(dst, src, c, sz); else memset(dst, 0, c); } while(0)
+#define mul(dst, src, c, sz, max)                                           \
+    do { if (c != 0) mul1(dst, src, c, sz, max); else memset(dst, 0, c); } while(0)
 #endif
 
 #define UNROLL 16 /* 1, 4, 8, 16 */
 static void
-slow_mul1(gf *dst1, gf *src1, gf c, int sz)
+slow_mul1(gf *dst, gf *src, gf c, int sz, int max)
 {
-    USE_GF_MULC ;
-    register gf *dst = dst1, *src = src1 ;
-    gf *lim = &dst[sz - UNROLL + 1] ;
+    USE_GF_MULC;
+
+    int dif = sz - max;
+    int pos = max - UNROLL + 1;
+    gf *lim = &dst[pos] ;
 
     GF_MULC0(c) ;
 
@@ -400,15 +402,24 @@ slow_mul1(gf *dst1, gf *src1, gf c, int sz)
     }
 #endif
     lim += UNROLL - 1 ;
-    for (; dst < lim; dst++, src++ )        /* final components */
-    GF_MULC( *dst , *src );
+    /* final components */
+    for (; dst < lim; dst++, src++) {
+        if (pos < max) {
+            GF_MULC( *dst , *src );
+        } else {
+            /* assume zero when past the max */
+            GF_MULC( *dst , 0 );
+        }
+        pos += 1;
+    }
+
 }
 
 # define mul1 slow_mul1
 
-static inline void mul(gf *dst, gf *src, gf c, int sz) {
+static inline void mul(gf *dst, gf *src, gf c, int sz, int max) {
     /*fprintf(stderr, "%p = %02x * %p\n", dst, c, src);*/
-    if (c != 0) mul1(dst, src, c, sz); else memset(dst, 0, c);
+    if (c != 0) mul1(dst, src, c, sz, max); else memset(dst, 0, c);
 }
 
 /*
@@ -692,7 +703,7 @@ static inline int code_some_shards(gf* matrixRows, gf** inputs, gf** outputs,
         for(iRow = 0; iRow < outputCount; iRow++) {
             printf("iRow: %i\n", iRow);
             if(0 == c) {
-                mul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount); // TODO bytesRemaining here?
+                mul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount, max);
             } else {
                 addmul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount, max);
             }
