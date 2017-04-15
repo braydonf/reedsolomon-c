@@ -290,20 +290,24 @@ generate_gf(void)
  * Note that gcc on
  */
 #if 0
-#define addmul(dst, src, c, sz, max)                \
-    if (c != 0) addmul1(dst, src, c, sz, max)
+#define addmul(dst, src, c, sz, dst_max, src_max)       \
+    if (c != 0) addmul1(dst, src, c, sz, dst_max, src_max)
 #endif
 
 
 
 #define UNROLL 16 /* 1, 4, 8, 16 */
 static void
-slow_addmul1(gf *dst, gf *src, gf c, int sz, int max)
+slow_addmul1(gf *dst, gf *src, gf c, int sz, int dst_max, int src_max)
 {
     USE_GF_MULC;
-    int dif = sz - max;
-    int pos = max - UNROLL + 1;
+    int low_max = dst_max < src_max ? dst_max : src_max;
+    int dif = sz - low_max;
+    int pos = low_max - UNROLL + 1;
     gf *lim = &dst[pos];
+
+    printf("addmul src_max: %i\n", src_max);
+    printf("addmul dst_max: %i\n", dst_max);
 
     GF_MULC0(c);
 
@@ -334,9 +338,9 @@ slow_addmul1(gf *dst, gf *src, gf c, int sz, int max)
     lim += dif + UNROLL - 1 ;
     /* final components */
     for (; dst < lim; dst++, src++ ) {
-        if (pos < max) {
+        if (pos < src_max && pos < dst_max) {
             GF_ADDMULC( *dst , *src );
-        } else {
+        } else if (pos < dst_max) {
             /* assume zero when past the max */
             GF_ADDMULC( *dst , 0 );
         }
@@ -346,9 +350,9 @@ slow_addmul1(gf *dst, gf *src, gf c, int sz, int max)
 
 # define addmul1 slow_addmul1
 
-static void addmul(gf *dst, gf *src, gf c, int sz, int max) {
+static void addmul(gf *dst, gf *src, gf c, int sz, int dst_max, int src_max) {
     fprintf(stderr, "Dst=%p Src=%p, gf=%02x sz=%d\n", dst, src, c, sz);
-    if (c != 0) addmul1(dst, src, c, sz, max);
+    if (c != 0) addmul1(dst, src, c, sz, dst_max, src_max);
 }
 
 /*
@@ -361,19 +365,23 @@ static void addmul(gf *dst, gf *src, gf c, int sz, int max) {
  * Note that gcc on
  */
 #if 0
-#define mul(dst, src, c, sz, max)                                           \
-    do { if (c != 0) mul1(dst, src, c, sz, max); else memset(dst, 0, c); } while(0)
+#define mul(dst, src, c, sz, dst_max, src_max)                                  \
+    do { if (c != 0) mul1(dst, src, c, sz, dst_max, src_max); else memset(dst, 0, c); } while(0)
 #endif
 
 #define UNROLL 16 /* 1, 4, 8, 16 */
 static void
-slow_mul1(gf *dst, gf *src, gf c, int sz, int max)
+slow_mul1(gf *dst, gf *src, gf c, int sz, int dst_max, int src_max)
 {
     USE_GF_MULC;
 
-    int dif = sz - max;
-    int pos = max - UNROLL + 1;
-    gf *lim = &dst[pos] ;
+    printf("mul src_max: %i\n", src_max);
+    printf("mul dst_max: %i\n", dst_max);
+
+    int low_max = dst_max < src_max ? dst_max : src_max;
+    int dif = sz - low_max;
+    int pos = low_max - UNROLL + 1;
+    gf *lim = &dst[pos];
 
     GF_MULC0(c) ;
 
@@ -404,9 +412,9 @@ slow_mul1(gf *dst, gf *src, gf c, int sz, int max)
     lim += UNROLL - 1 ;
     /* final components */
     for (; dst < lim; dst++, src++) {
-        if (pos < max) {
+        if (pos < src_max && pos < dst_max) {
             GF_MULC( *dst , *src );
-        } else {
+        } else if (pos < dst_max) {
             /* assume zero when past the max */
             GF_MULC( *dst , 0 );
         }
@@ -417,9 +425,9 @@ slow_mul1(gf *dst, gf *src, gf c, int sz, int max)
 
 # define mul1 slow_mul1
 
-static inline void mul(gf *dst, gf *src, gf c, int sz, int max) {
-    /*fprintf(stderr, "%p = %02x * %p\n", dst, c, src);*/
-    if (c != 0) mul1(dst, src, c, sz, max); else memset(dst, 0, c);
+static inline void mul(gf *dst, gf *src, gf c, int sz, int dst_max, int src_max) {
+    fprintf(stderr, "%p = %02x * %p\n", dst, c, src);
+    if (c != 0) mul1(dst, src, c, sz, dst_max, src_max); else memset(dst, 0, c);
 }
 
 /*
@@ -526,7 +534,7 @@ invert_mat(gf *src, int k)
         if (ix != icol) {
             c = p[icol] ;
             p[icol] = 0 ;
-            addmul(p, pivot_row, c, k, k); //TODO check max is okay at same value as k
+            addmul(p, pivot_row, c, k, k, k); //TODO check dst_max and src_max is okay at same value as k
         }
         }
     }
@@ -682,30 +690,23 @@ static gf* multiply1(gf *a, int ar, int ac, gf *b, int br, int bc) {
 /* copy from golang rs version */
 static inline int code_some_shards(gf* matrixRows, gf** inputs, gf** outputs,
                                    int dataShards, int outputCount, int byteCount,
-                                   uint64_t totalBytes) {
+                                   uint64_t *inputsMax, uint64_t *outputsMax)
+{
     gf* in;
     int iRow, c;
     for(c = 0; c < dataShards; c++) {
         printf("c: %i\n", c);
-        printf("bytePosition: %i\n", c * byteCount);
-
-        uint64_t bytesRemaining = totalBytes - c * byteCount;
-        printf("bytesRemaining: %lu\n", bytesRemaining);
-
-        uint64_t max = byteCount;
-        if (bytesRemaining < byteCount) {
-            max = bytesRemaining;
-        }
-
-        printf("maxBytes: %lu\n", max);
 
         in = inputs[c];
         for(iRow = 0; iRow < outputCount; iRow++) {
             printf("iRow: %i\n", iRow);
+
             if(0 == c) {
-                mul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount, max);
+                mul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount,
+                    outputsMax[iRow], inputsMax[c]);
             } else {
-                addmul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount, max);
+                addmul(outputs[iRow], in, matrixRows[iRow*dataShards+c], byteCount,
+                       outputsMax[iRow], inputsMax[c]);
             }
         }
     }
@@ -820,9 +821,31 @@ int reed_solomon_encode(reed_solomon* rs,
 {
     assert(NULL != rs && NULL != rs->parity);
 
+    uint64_t data_blocks_max[rs->data_shards];
+    uint64_t fec_blocks_max[rs->parity_shards];
+
+    int c = 0;
+
+    // Calculate the max for each shard based on the total bytes
+    for(c = 0; c < rs->data_shards; c++) {
+        uint64_t bytes_remaining = total_bytes - c * block_size;
+        uint64_t max = block_size;
+        if (bytes_remaining < block_size) {
+            max = bytes_remaining;
+        }
+        printf("encode %i max: %lu\n", c, max);
+        data_blocks_max[c] = max;
+    }
+
+    // All of the parity shards will be the block size
+    for (c = 0; c < rs->parity_shards; c++) {
+        printf("encode fec %i max: %i\n", c, block_size);
+        fec_blocks_max[c] = block_size;
+    }
+
     return code_some_shards(rs->parity, data_blocks, fec_blocks,
                             rs->data_shards, rs->parity_shards, block_size,
-                            total_bytes);
+                            data_blocks_max, fec_blocks_max);
 }
 
 /**
@@ -847,7 +870,9 @@ int reed_solomon_decode(reed_solomon* rs,
     /* use stack instead of malloc, define a small number of DATA_SHARDS_MAX to save memory */
     gf dataDecodeMatrix[DATA_SHARDS_MAX*DATA_SHARDS_MAX];
     unsigned char* subShards[DATA_SHARDS_MAX];
+    uint64_t subShardsMax[DATA_SHARDS_MAX];
     unsigned char* outputs[DATA_SHARDS_MAX];
+    uint64_t outputsMax[DATA_SHARDS_MAX];
     gf* m = rs->m;
     int i, j, c, swap, subMatrixRow, dataShards, nos, nshards;
 
@@ -879,8 +904,20 @@ int reed_solomon_decode(reed_solomon* rs,
     nos = 0;
     nshards = 0;
     dataShards = rs->data_shards;
+
+    printf("begin.\n");
     for(i = 0; i < dataShards; i++) {
+        printf("i: %i\n", i);
+
+        // Determine of the shard has less that block_size
+        uint64_t remaining = total_bytes - i * block_size;
+        uint64_t max = block_size;
+        if (remaining < block_size) {
+            max = remaining;
+        }
+
         if(j < nr_fec_blocks && i == erased_blocks[j]) {
+            printf("ignored i: %i\n", i);
             //ignore the invalid block
             j++;
         } else {
@@ -888,13 +925,18 @@ int reed_solomon_decode(reed_solomon* rs,
             for(c = 0; c < dataShards; c++) {
                 dataDecodeMatrix[subMatrixRow*dataShards + c] = m[i*dataShards + c];
             }
+            printf("valid shard %i at sub shard index %i\n", i, subMatrixRow);
             subShards[subMatrixRow] = data_blocks[i];
+            subShardsMax[subMatrixRow] = max;
             subMatrixRow++;
         }
     }
+    printf("end.\n");
 
     for(i = 0; i < nr_fec_blocks && subMatrixRow < dataShards; i++) {
         subShards[subMatrixRow] = dec_fec_blocks[i];
+        subShardsMax[subMatrixRow] = block_size; /* all fec shards have block_size */
+        printf("valid fec block %i at index %i\n", fec_block_nos[i], subMatrixRow);
         j = dataShards + fec_block_nos[i];
         for(c = 0; c < dataShards; c++) {
             dataDecodeMatrix[subMatrixRow*dataShards + c] = m[j*dataShards + c]; //use spefic pos of original fec_blocks
@@ -915,7 +957,18 @@ int reed_solomon_decode(reed_solomon* rs,
 
     for(i = 0; i < nr_fec_blocks; i++) {
         j = erased_blocks[i];
+
+        // Determine of the shard has less that block_size
+        uint64_t remaining = total_bytes - j * block_size;
+        uint64_t max = block_size;
+        if (remaining < block_size) {
+            max = remaining;
+        }
+
+        printf("erased_block %i at output index %i\n", j, i);
         outputs[i] = data_blocks[j];
+        outputsMax[i] = max;
+
         //data_blocks[j][0] = 0;
         memmove(dataDecodeMatrix+i*dataShards, dataDecodeMatrix+j*dataShards, dataShards);
     }
@@ -926,7 +979,8 @@ int reed_solomon_decode(reed_solomon* rs,
     //print_matrix2(outputs, nr_fec_blocks, block_size);
 
     return code_some_shards(dataDecodeMatrix, subShards, outputs,
-                            dataShards, nr_fec_blocks, block_size, total_bytes);
+                            dataShards, nr_fec_blocks, block_size,
+                            subShardsMax, outputsMax);
 }
 
 /**
